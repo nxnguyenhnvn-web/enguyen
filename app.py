@@ -13,6 +13,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 import analysis as A
+import chart as C
 import data as D
 import features as FE
 import forecast as F
@@ -324,35 +325,9 @@ with tab_stock:
     m[5].metric("Foreign own.", f"{prof.get('foreignerPercentage', 0):.1%}" if prof.get("foreignerPercentage") else "–")
 
     # --- chart
-    period = st.radio("Chart period", ["6M", "1Y", "2Y", "All"], index=1, horizontal=True)
-    n = {"6M": 126, "1Y": 250, "2Y": 500, "All": len(d)}[period]
-    v = d.tail(n)
-    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[.55, .15, .15, .15], vertical_spacing=.02)
-    fig.add_candlestick(x=v["time"], open=v["open"], high=v["high"], low=v["low"], close=v["close"], name=sym,
-                        increasing_line_color=UP, decreasing_line_color=DOWN, row=1, col=1)
-    for col, colr in (("ma20", "#f59e0b"), ("ma50", "#3b82f6"), ("ma200", "#a855f7")):
-        fig.add_scatter(x=v["time"], y=v[col], name=col.upper(), line=dict(width=1.2, color=colr), row=1, col=1)
-    fig.add_scatter(x=v["time"], y=v["bb_up"], line=dict(width=.6, dash="dot", color=NEUTRAL), name="BB", row=1, col=1)
-    fig.add_scatter(x=v["time"], y=v["bb_dn"], line=dict(width=.6, dash="dot", color=NEUTRAL), showlegend=False, row=1, col=1)
-    fc = r["fc"]
-    fig.add_scatter(x=fc["dates"], y=fc["high"], line=dict(width=0), showlegend=False, row=1, col=1)
-    fig.add_scatter(x=fc["dates"], y=fc["low"], fill="tonexty", fillcolor="rgba(14,165,233,.18)", line=dict(width=0),
-                    name="Forecast P10–P90", row=1, col=1)
-    fig.add_scatter(x=fc["dates"], y=fc["mean"], line=dict(color="#0ea5e9", width=2, dash="dash"),
-                    name=f"{fc['engine']} forecast", row=1, col=1)
-    fig.add_bar(x=v["time"], y=v["volume"], marker_color=np.where(v["close"] >= v["open"], UP, DOWN), name="Volume",
-                row=2, col=1)
-    fig.add_scatter(x=v["time"], y=v["rsi"], name="RSI", line=dict(color="#8b5cf6"), row=3, col=1)
-    for lv in (30, 70):
-        fig.add_hline(y=lv, line_dash="dot", line_color=NEUTRAL, row=3, col=1)
-    fig.add_bar(x=v["time"], y=v["macd_hist"], marker_color=np.where(v["macd_hist"] >= 0, UP, DOWN), name="MACD hist",
-                row=4, col=1)
-    fig.add_scatter(x=v["time"], y=v["macd"], name="MACD", line=dict(color="#0ea5e9", width=1), row=4, col=1)
-    fig.add_scatter(x=v["time"], y=v["macd_signal"], name="Signal", line=dict(color="#f97316", width=1), row=4, col=1)
-    fig.update_layout(height=780, xaxis_rangeslider_visible=False, margin=dict(t=10, b=10),
-                      legend=dict(orientation="h", y=1.02))
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    st.plotly_chart(fig, use_container_width=True)
+    C.render(d, sym, fc=r["fc"], height=720, default_range="1Y", key="detail")
+    st.caption("Kéo để di chuyển, cuộn để phóng to · bật/tắt chỉ báo trên thanh công cụ · ⚙ đổi tham số "
+               f"(lưu trong trình duyệt) · Dự báo = {r['fc']['engine']} {horizon} phiên, đường chấm = P10/P90.")
 
     # --- scorecard
     st.markdown("### Scorecard & reasons")
@@ -429,16 +404,7 @@ with tab_fc:
             k[3].metric("MAPE vs naive", f"{summ['mape']:.1%}", f"{summ['mape'] - summ['naive_mape']:+.1%} vs random-walk",
                         delta_color="inverse")
             k[4].metric("P10–P90 coverage", f"{summ['band_coverage']:.0%}")
-        hist = rf["d"].tail(120)
-        g = go.Figure()
-        g.add_candlestick(x=hist["time"], open=hist["open"], high=hist["high"], low=hist["low"], close=hist["close"],
-                          name=sym_f, increasing_line_color=UP, decreasing_line_color=DOWN)
-        for p in fc["paths"][:10]:
-            g.add_scatter(x=fc["dates"], y=p, line=dict(width=.7, color="rgba(14,165,233,.35)"), showlegend=False)
-        g.add_scatter(x=fc["dates"], y=fc["mean"], line=dict(width=3, color="#0284c7"), name="Mean forecast")
-        g.update_layout(height=460, xaxis_rangeslider_visible=False, margin=dict(t=10, b=10))
-        g.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-        st.plotly_chart(g, use_container_width=True)
+        C.render(rf["d"], sym_f, fc=fc, paths=True, height=600, default_range="6M", key="forecast")
 
         # reasoning
         s = rf["snap"]
