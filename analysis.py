@@ -239,7 +239,19 @@ def rating(score: float) -> str:
             else "REDUCE" if score >= 35 else "SELL")
 
 
-DEFAULT_WEIGHTS = {"FA": 30, "TA": 25, "Macro": 15, "Forecast": 20, "Liquidity": 10}
+def score_ml(row):
+    """row: one line of features.score_latest() or None."""
+    if row is None:
+        return 50.0, [("~", "Not in the ML universe or no data – neutral 50")]
+    if not row["investable"]:
+        return 50.0, [("~", "Too illiquid for the ML ranker (trained on stocks trading > 1 bn VND/day) – neutral 50")]
+    s = float(row["ml_score"])
+    head = ("+" if s >= 60 else "-" if s < 40 else "~",
+            f"Predicted to beat {s:.0f}% of ~120 liquid VN stocks over the next 20 sessions")
+    return s, [head] + list(row["why"])
+
+
+DEFAULT_WEIGHTS = {"FA": 25, "TA": 20, "Macro": 15, "ML": 20, "Forecast": 10, "Liquidity": 10}
 
 
 def composite(scores: dict, weights: dict) -> float:

@@ -5,6 +5,7 @@ plotly
 pandas
 numpy
 matplotlib
+lightgbm
 # Kronos forecasting (model code in kronos_src/, weights auto-downloaded from Hugging Face)
 torch
 huggingface_hub

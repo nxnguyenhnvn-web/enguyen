@@ -22,7 +22,17 @@ Model weights (`NeoQuasar/Kronos-mini|small|base`) download from Hugging Face on
 | Forecast & backtest | Kronos sampled paths, P10–P90 band, rolling-origin backtest (hit-rate, MAPE vs random-walk, band coverage) and a written explanation |
 | Macro | Sub-sector × macro-factor sensitivity matrix, VN-Index regime |
 
-**Composite score** = weighted FA (30) + TA (25) + Macro (15) + Forecast (20) + Liquidity (10); weights editable in the sidebar.
+| ML ranking | LightGBM cross-sectional ranker over ~125 liquid stocks: today's ML score with drivers, walk-forward backtest vs Kronos and momentum, feature importance |
+
+**Composite score** = weighted FA (25) + TA (20) + Macro (15) + ML (20) + Forecast (10) + Liquidity (10); weights editable in the sidebar.
+
+### ML ranker
+- Universe: VN100 + transport/port stocks; only names trading > 1 bn VND/day are scored.
+- Features (point-in-time): momentum/technicals, foreign net buying and ownership change (VNDirect),
+  earnings growth & acceleration, E/P, B/P, S/P at the current price, ROE, margins, leverage (Vietcap TTM ratios,
+  used 45 days after quarter-end, 90 days for Q4).
+- Target: 20-session forward return rank. Retrained every month in the backtest (walk-forward, no look-ahead).
+- Retrain: `python train_ranker.py --kronos 24` (≈ 1 h with the Kronos comparison), then commit `models/`.
 Ratings: ≥70 STRONG BUY · ≥60 BUY · ≥45 HOLD · ≥35 REDUCE · else SELL.
 
 - **FA**: ROE, P/E, P/B, D/E, net margin, TTM revenue & earnings growth YoY, dividend yield.

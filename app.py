@@ -2,6 +2,10 @@
 
 Run:  streamlit run app.py
 """
+import json
+import os
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,6 +14,7 @@ from plotly.subplots import make_subplots
 
 import analysis as A
 import data as D
+import features as FE
 import forecast as F
 
 st.set_page_config(page_title="enguyen · VN Transport & Ports", page_icon="⚓", layout="wide")
@@ -106,6 +111,25 @@ def run_forecast(sym, last_date, horizon, lookback, paths, windows, model_name, 
     return fc, bt, summ
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def ml_table():
+    """Latest ML ranker scores for the whole universe (~125 stocks), or (None, error)."""
+    try:
+        booster = lgb.Booster(model_file=os.path.join(FE.MODEL_DIR, "ranker.txt"))
+        raw = FE.load_all(FE.universe())
+        return FE.score_latest(raw, load_index(), booster), None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def ml_backtest():
+    try:
+        with open(os.path.join(FE.MODEL_DIR, "backtest.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 # ------------------------------------------------------------------ sidebar
 st.sidebar.markdown("<div class='brand'><span class='logo'>e</span><span class='name'>enguyen</span></div>"
                     "<div style='color:#787b86;font-size:.8rem;margin-bottom:8px'>VN Transport & Ports</div>",
@@ -141,6 +165,10 @@ idx = load_index()
 market = D.market_regime(idx)
 if "fc" not in st.session_state:
     st.session_state.fc = {}  # sym -> (fc, bt, summary) from explicit Kronos runs
+with st.spinner("Scoring ~125 VN stocks with the ML ranker (first load ≈ 30 s)…"):
+    ml, ml_err = ml_table()
+if ml_err:
+    st.sidebar.warning(f"ML ranker unavailable → neutral ML score.\n\n{ml_err}")
 
 
 def evaluate(sym):
@@ -160,6 +188,7 @@ def evaluate(sym):
     scores["FA"], why["FA"] = A.score_fa(fa)
     scores["TA"], why["TA"] = A.score_ta(snap)
     scores["Macro"], why["Macro"] = A.score_macro(sub, macro, market)
+    scores["ML"], why["ML"] = A.score_ml(ml.loc[sym] if ml is not None and sym in ml.index else None)
     scores["Forecast"], why["Forecast"] = A.score_forecast(fc["exp_ret"], summ.get("hit_rate"), fc["engine"], horizon)
     scores["Liquidity"], why["Liquidity"] = A.score_liquidity(snap["value20"])
     total = A.composite(scores, weights)
@@ -225,7 +254,8 @@ c2.metric("Group avg 1D", f"{avg1d:+.2%}")
 c3.metric("Stocks loaded", len(res))
 c4.metric("Forecast engine", ("Kronos · " + model_name.split("/")[-1]) if use_kronos else "Statistical")
 
-tab_rank, tab_stock, tab_fc, tab_macro = st.tabs(["🏆 Ranking", "🔎 Stock detail", "🔮 Forecast & backtest", "🌏 Macro"])
+tab_rank, tab_stock, tab_ml, tab_fc, tab_macro = st.tabs(
+    ["🏆 Ranking", "🔎 Stock detail", "🤖 ML ranking", "🔮 Forecast & backtest", "🌏 Macro"])
 
 # ------------------------------------------------------------------ ranking
 with tab_rank:
@@ -326,7 +356,7 @@ with tab_stock:
 
     # --- scorecard
     st.markdown("### Scorecard & reasons")
-    cols = st.columns(5)
+    cols = st.columns(len(r["scores"]))
     for col, (k, sc) in zip(cols, r["scores"].items()):
         col.metric(f"{k} (w={weights[k]})", f"{sc:.0f}/100")
         with col.expander("Why", expanded=True):
@@ -432,6 +462,74 @@ with tab_fc:
         st.info("Press the button to run the forecast and its rolling backtest for this ticker.")
 
 # ------------------------------------------------------------------ macro
+with tab_ml:
+    st.markdown(f"""**Cross-sectional ML ranker** — a LightGBM model that ranks ~{len(ml) if ml is not None else 120} liquid
+Vietnamese stocks (VN100 + transport/ports) by their expected return over the next **{FE.HORIZON} sessions** relative to
+each other. Inputs: momentum & technicals, **foreign net buying / ownership change**, **earnings growth & acceleration**,
+live valuation (E/P, B/P, S/P) and quality (ROE, margins, leverage). Fundamentals are used only after they would have been
+published. Score = % of the universe the stock is predicted to beat.""")
+    if ml is None:
+        st.warning(f"ML scores unavailable: {ml_err}")
+    else:
+        g = ml.loc[[s for s in res if s in ml.index]].copy()
+        g["Ticker"] = g.index
+        g["ML score"] = g["ml_score"].round(0)
+        g["Main drivers"] = g["why"].map(lambda w: " · ".join(("▲ " if s == "+" else "▼ ") + t for s, t in w[:3]))
+        g.loc[~g["investable"], "Main drivers"] = "Too illiquid for the model (< 1 bn VND/day)"
+        g = g.sort_values("ML score", ascending=False, na_position="last")
+        st.markdown(f"##### {group} — ranked by ML score (data as of {ml['date'].iloc[0]:%d/%m/%Y})")
+        st.dataframe(g[["Ticker", "ML score", "Main drivers"]].style.format({"ML score": "{:.0f}"}, na_rep="–")
+                     .map(lambda v: f"color:{UP if v >= 60 else REF if v >= 40 else DOWN};font-weight:700"
+                          if isinstance(v, float) and not pd.isna(v) else "", subset=["ML score"]),
+                     use_container_width=True, hide_index=True)
+        with st.expander("Top 15 across the whole ML universe"):
+            top = ml[ml["investable"]].sort_values("ml_score", ascending=False).head(15)
+            st.dataframe(pd.DataFrame({"Ticker": top.index, "ML score": top["ml_score"].round(0),
+                                       "Main drivers": top["why"].map(lambda w: " · ".join(t for _, t in w[:2]))}),
+                         use_container_width=True, hide_index=True)
+
+    bt = ml_backtest()
+    if bt:
+        st.markdown(f"### Walk-forward backtest (retrained monthly, tested {bt['test_start'][:7]} → "
+                    f"{bt['generated'][:7]}, {bt['universe_size']} stocks)")
+        names = {"ml": "ML ranker", "momentum": "Momentum 12-1", "kronos": "Kronos-small"}
+        rows = []
+        for key, v in bt["results"].items():
+            scope, mth, window = key.split("|")
+            s = v["summary"]
+            if s:
+                rows.append({"Universe": "All ~120" if scope == "all" else "Transport/ports", "Method": names[mth],
+                             "Period": "Full test" if window == "full" else "Kronos window", "Months": s["months"],
+                             "Rank IC": s["mean_ic"], "IC t-stat": s["ic_t"], "IC > 0": s["pct_ic_pos"],
+                             "Top-quintile excess / mo": s["top_excess_m"], "Q5 − Q1 / mo": s["spread_m"]})
+        st.dataframe(pd.DataFrame(rows).style.format(
+            {"Rank IC": "{:+.3f}", "IC t-stat": "{:+.1f}", "IC > 0": "{:.0%}", "Top-quintile excess / mo": "{:+.2%}",
+             "Q5 − Q1 / mo": "{:+.2%}"}), use_container_width=True, hide_index=True)
+        st.caption("Rank IC = correlation between the predicted ranking and the realised 20-day return ranking each "
+                   "month (0 = no skill; +0.03–0.05 is useful in practice). t-stat above ~2 means unlikely to be luck. "
+                   "Top-quintile excess = return of the top 20% picks minus the average stock.")
+
+        c1, c2 = st.columns(2)
+        fig = go.Figure()
+        colors = {"ml": "#f26f21", "momentum": "#787b86", "kronos": "#1fc8e6"}
+        for mth in ("ml", "momentum", "kronos"):
+            for window in ("full", "kronos_window"):
+                v = bt["results"].get(f"all|{mth}|{window}")
+                if v and v["series"] and (window == "full" or mth == "kronos"):
+                    sr = pd.DataFrame(v["series"])
+                    fig.add_scatter(x=sr["date"], y=sr["cum_top_excess"], name=names[mth],
+                                    line=dict(color=colors[mth], width=2.5 if mth == "ml" else 1.5))
+        fig.update_layout(title="Cumulative excess return of top-quintile picks", height=340,
+                          yaxis_tickformat=".0%", margin=dict(t=40, b=10), legend=dict(orientation="h"))
+        c1.plotly_chart(fig, use_container_width=True)
+        imp = pd.Series(bt.get("importance", {})).head(12)[::-1]
+        fig2 = go.Figure(go.Bar(x=imp.values, y=[FE.FEATURES.get(k, k) for k in imp.index], orientation="h",
+                                marker_color="#f26f21"))
+        fig2.update_layout(title="What the model relies on (gain share)", height=340, xaxis_tickformat=".0%",
+                           margin=dict(t=40, b=10))
+        c2.plotly_chart(fig2, use_container_width=True)
+        st.caption("Retrain locally with `python train_ranker.py --kronos 24`, then push models/ to GitHub.")
+
 with tab_macro:
     st.markdown("Macro score = sector sensitivity × your macro view (sidebar) + VN-Index regime (MA200 & 3M trend).")
     sens = pd.DataFrame(A.SENSITIVITY).T.rename(columns={k: v[0] for k, v in A.MACRO_FACTORS.items()})
