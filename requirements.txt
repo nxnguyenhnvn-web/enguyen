@@ -1,0 +1,13 @@
+# CPU-only PyTorch (keeps the Streamlit Cloud image small; no CUDA)
+--extra-index-url https://download.pytorch.org/whl/cpu
+streamlit>=1.40
+plotly
+pandas
+numpy
+matplotlib
+# Kronos forecasting (model code in kronos_src/, weights auto-downloaded from Hugging Face)
+torch
+huggingface_hub
+einops
+safetensors
+tqdm

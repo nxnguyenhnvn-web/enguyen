@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.claude/
+kronos_src/kronos.zip
+# ship only Kronos model code + license (MIT)
+kronos_src/Kronos-master/*
+!kronos_src/Kronos-master/model/
+!kronos_src/Kronos-master/LICENSE
