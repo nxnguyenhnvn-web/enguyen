@@ -20,21 +20,64 @@ def _get(url, payload=None, raw=False):
     return body if raw else json.loads(body)
 
 
-def history(symbol: str, days: int = 1500) -> pd.DataFrame:
-    """Daily OHLCV. Stock prices returned in 1,000 VND (index stays in points)."""
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+      "Accept": "application/json, text/plain, */*"}
+
+
+def _frame(d, scale=1.0):
+    return pd.DataFrame({"time": pd.to_datetime(np.array(d["t"], dtype="int64"), unit="s").normalize(),
+                         "open": np.array(d["o"], float) / scale, "high": np.array(d["h"], float) / scale,
+                         "low": np.array(d["l"], float) / scale, "close": np.array(d["c"], float) / scale,
+                         "volume": np.array(d["v"], float)})
+
+
+def _vietcap(symbol, days):
     d = _get("https://trading.vietcap.com.vn/api/chart/OHLCChart/gap-chart",
-             {"timeFrame": "ONE_DAY", "symbols": [symbol], "to": int(time.time()) + 86400, "countBack": days})
-    if not d or not d[0].get("t"):
-        return pd.DataFrame()
-    d = d[0]
-    df = pd.DataFrame({"time": pd.to_datetime(np.array(d["t"], dtype="int64"), unit="s").normalize(),
-                       "open": d["o"], "high": d["h"], "low": d["l"], "close": d["c"], "volume": d["v"]})
-    if "INDEX" not in symbol:
-        df[["open", "high", "low", "close"]] /= 1000
-        if d.get("accumulatedValue"):  # value in million VND → session VWAP in 1,000 VND (UPCoM reference)
-            df["avg"] = np.array(d["accumulatedValue"], dtype=float) * 1000 / df["volume"].replace(0, np.nan)
-    df = df[df["volume"] > 0] if "INDEX" not in symbol else df
-    return df.drop_duplicates("time").reset_index(drop=True)
+             {"timeFrame": "ONE_DAY", "symbols": [symbol], "to": int(time.time()) + 86400, "countBack": days})[0]
+    df = _frame(d, 1 if "INDEX" in symbol else 1000)
+    if "INDEX" not in symbol and d.get("accumulatedValue"):
+        # value in million VND → session VWAP in 1,000 VND (UPCoM reference price)
+        df["avg"] = np.array(d["accumulatedValue"], dtype=float) * 1000 / df["volume"].replace(0, np.nan)
+    return df
+
+
+def _entrade(symbol, days):  # DNSE; reachable from outside Vietnam
+    kind = "index" if "INDEX" in symbol else "stock"
+    to = int(time.time()) + 86400
+    url = (f"https://services.entrade.com.vn/chart-api/v2/ohlcs/{kind}?from={to - days * 2 * 86400}&to={to}"
+           f"&symbol={symbol}&resolution=1D")
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=20) as r:
+        return _frame(json.loads(r.read()))
+
+
+def _vndirect(symbol, days):
+    to = int(time.time()) + 86400
+    url = (f"https://dchart-api.vndirect.com.vn/dchart/history?resolution=D&symbol={symbol}"
+           f"&from={to - days * 2 * 86400}&to={to}")
+    h = {**UA, "Origin": "https://dchart.vndirect.com.vn", "Referer": "https://dchart.vndirect.com.vn/"}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=20) as r:
+        return _frame(json.loads(r.read()))
+
+
+SOURCES = [("Vietcap", _vietcap), ("Entrade", _entrade), ("VNDirect", _vndirect)]
+
+
+def history(symbol: str, days: int = 1500) -> pd.DataFrame:
+    """Daily OHLCV from the first source that answers (Vietcap blocks non-VN servers).
+    Stock prices in 1,000 VND, index in points; df.attrs['source'] names the source. Never raises."""
+    for name, fn in SOURCES:
+        try:
+            df = fn(symbol, days)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        if "INDEX" not in symbol:
+            df = df[df["volume"] > 0]
+        df = df.drop_duplicates("time").tail(days).reset_index(drop=True)
+        df.attrs["source"] = name
+        return df
+    return pd.DataFrame()
 
 
 def profile(symbol: str) -> dict:

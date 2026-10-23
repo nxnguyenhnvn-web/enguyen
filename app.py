@@ -168,7 +168,7 @@ def evaluate(sym):
     exch = "hnx" if "hnx" in grp else "upcom" if "upcom" in grp else "hose"
     ref, ceil, floor = price_limits(d, exch)
     return {"sym": sym, "name": prof.get("enOrganShortName") or A.UNIVERSE.get(sym, (sym,))[0], "sub": sub,
-            "exch": exch, "ref": ref, "ceil": ceil, "floor": floor,
+            "src": h.attrs.get("source", "?"), "exch": exch, "ref": ref, "ceil": ceil, "floor": floor,
             "color": board_color(snap["close"], ref, ceil, floor),
             "d": d, "snap": snap, "fa": fa, "rat": rat, "prof": prof, "fc": fc, "summ": summ,
             "scores": scores, "why": why, "total": total, "rating": A.rating(total),
@@ -182,6 +182,14 @@ with st.spinner(f"Loading {len(symbols)} stocks from Vietcap…"):
 missing = [s for s in symbols if s not in res]
 if missing:
     st.sidebar.warning("No/short price data: " + ", ".join(missing))
+if res:
+    srcs = pd.Series([r["src"] for r in res.values()]).value_counts()
+    n_fa = sum(bool(r["fa"]) for r in res.values())
+    st.sidebar.caption(f"Prices: {', '.join(f'{k} ({v})' for k, v in srcs.items())} · "
+                       f"Fundamentals/news: {n_fa}/{len(res)} stocks (Vietcap IQ)")
+else:
+    st.error("Could not reach any price source (Vietcap, Entrade, VNDirect). Try again in a minute.")
+    st.stop()
 
 
 if res:  # FireAnt-style watchlist board, sorted by % change like the original
